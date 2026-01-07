@@ -2,6 +2,8 @@
 
 A Telegram bot that can download and share Instagram videos.
 
+*Auto-deployment enabled via GitHub Actions*
+
 ## Features
 
 - Introduction message when bot starts
