@@ -10,9 +10,10 @@ NC='\033[0m'
 
 cd /var/www/rvbot
 
-# Pull latest from GitHub
+# Fetch and reset to match remote exactly
 echo -e "${YELLOW}Pulling latest code...${NC}"
-git pull origin main || git pull origin master
+git fetch origin
+git reset --hard origin/main
 
 # Install dependencies
 echo -e "${YELLOW}Installing dependencies...${NC}"
