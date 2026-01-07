@@ -84,9 +84,44 @@ function getStats() {
 
 // Try to find yt-dlp executable
 function findYtDlpPath() {
+  const { execSync } = require('child_process');
+  
+  // Try to find yt-dlp in PATH and get full path
+  try {
+    // On Linux/Mac, use 'which' to get full path
+    if (process.platform !== 'win32') {
+      try {
+        const fullPath = execSync('which yt-dlp', { encoding: 'utf8' }).trim();
+        if (fullPath && fs.existsSync(fullPath)) {
+          console.log(`[${new Date().toISOString()}] Found yt-dlp at: ${fullPath}`);
+          return fullPath;
+        }
+      } catch (e) {
+        // which failed, continue
+      }
+    }
+    
+    // Try executing yt-dlp directly to see if it's in PATH
+    try {
+      execSync('yt-dlp --version', { stdio: 'ignore' });
+      // If it works, try to get the full path
+      if (process.platform !== 'win32') {
+        try {
+          const fullPath = execSync('which yt-dlp', { encoding: 'utf8' }).trim();
+          if (fullPath) return fullPath;
+        } catch (e) {}
+      }
+      console.log(`[${new Date().toISOString()}] Found yt-dlp in PATH: yt-dlp`);
+      return 'yt-dlp';
+    } catch (e) {
+      // Not in PATH
+    }
+  } catch (e) {
+    // Continue to other methods
+  }
+
   // Common Windows locations
   const possiblePaths = [
-    'yt-dlp', // Try PATH first
     'yt-dlp.exe',
     path.join(process.env.APPDATA || '', 'Python', 'Python314', 'Scripts', 'yt-dlp.exe'),
     path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python314', 'Scripts', 'yt-dlp.exe'),
@@ -95,22 +130,9 @@ function findYtDlpPath() {
 
   for (const ytDlpPath of possiblePaths) {
     try {
-      // Check if file exists (for full paths) or if command exists (for PATH)
-      if (ytDlpPath.includes('\\') || ytDlpPath.includes('/')) {
-        if (fs.existsSync(ytDlpPath)) {
-          console.log(`[${new Date().toISOString()}] Found yt-dlp at: ${ytDlpPath}`);
-          return ytDlpPath;
-        }
-      } else {
-        // Try to execute it to see if it's in PATH
-        const { execSync } = require('child_process');
-        try {
-          execSync(`${ytDlpPath} --version`, { stdio: 'ignore' });
-          console.log(`[${new Date().toISOString()}] Found yt-dlp in PATH: ${ytDlpPath}`);
-          return ytDlpPath;
-        } catch (e) {
-          // Not found, continue
-        }
+      if (fs.existsSync(ytDlpPath)) {
+        console.log(`[${new Date().toISOString()}] Found yt-dlp at: ${ytDlpPath}`);
+        return ytDlpPath;
       }
     } catch (e) {
       // Continue to next path
@@ -119,7 +141,6 @@ function findYtDlpPath() {
   
   // Fallback: try python -m yt_dlp
   try {
-    const { execSync } = require('child_process');
     execSync('python -m yt_dlp --version', { stdio: 'ignore' });
     console.log(`[${new Date().toISOString()}] Using python -m yt_dlp`);
     return 'python';
@@ -181,9 +202,10 @@ async function downloadInstagramVideo(ctx, messageText) {
     console.log(`[${new Date().toISOString()}] Output path: ${outputPath}`);
     console.log(`[${new Date().toISOString()}] yt-dlp binary path: ${ytDlpWrap.getBinaryPath()}`);
 
-    // Check if yt-dlp binary exists
+    // Check if yt-dlp binary exists (skip check if it's a command name in PATH)
     const binaryPath = ytDlpWrap.getBinaryPath();
-    if (!fs.existsSync(binaryPath)) {
+    const isCommandName = !binaryPath.includes('/') && !binaryPath.includes('\\') && !binaryPath.endsWith('.exe');
+    if (!isCommandName && !fs.existsSync(binaryPath)) {
       console.error(`[${new Date().toISOString()}] yt-dlp binary not found at: ${binaryPath}`);
       throw new Error(`yt-dlp binary not found at ${binaryPath}. Please install yt-dlp.`);
     }
