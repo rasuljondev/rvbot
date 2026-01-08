@@ -493,15 +493,22 @@ async function showYouTubeFormats(ctx, youtubeUrl) {
     // First, collect all formats with quality info
     for (const line of formatLines) {
       // Match format ID, extension, resolution, and quality
-      const match = line.match(/^(\d+)\s+(\w+)\s+.*?(\d+x\d+|\d+p).*?(audio only|video only|,)/i);
+      // Example formats:
+      // "137 mp4  1920x1080 1080p, video only, 5.20MiB"
+      // "22 mp4  1280x720 720p, 2.50MiB"
+      // "18 mp4  640x360 360p, 1.20MiB"
+      const match = line.match(/^(\d+)\s+(\w+)\s+.*?(\d+x\d+|\d+p)/i);
       if (match) {
         const formatId = match[1];
         const ext = match[2];
         const resolution = match[3];
-        const type = match[4] ? match[4].toLowerCase() : '';
+        
+        // Check if it's audio-only or video-only (we want combined formats)
+        const isAudioOnly = line.toLowerCase().includes('audio only');
+        const isVideoOnly = line.toLowerCase().includes('video only');
         
         // Skip audio-only and video-only formats (we want combined)
-        if (!type.includes('audio only') && !type.includes('video only')) {
+        if (!isAudioOnly && !isVideoOnly) {
           // Extract quality (e.g., "1080p" from "1920x1080" or "1080p")
           let quality = '';
           if (resolution.includes('p')) {
@@ -533,13 +540,15 @@ async function showYouTubeFormats(ctx, youtubeUrl) {
       return aIndex - bIndex;
     });
     
-    // If no combined formats found, use yt-dlp format selectors
+    // If no combined formats found, use yt-dlp format selectors for specific qualities
     if (formats.length === 0) {
-      formats.push({ id: 'best', ext: 'mp4', quality: 'BEST' });
-      formats.push({ id: 'worst', ext: 'mp4', quality: 'WORST' });
-    } else {
-      // Add "BEST" option at the beginning
-      formats.unshift({ id: 'best', ext: 'mp4', quality: 'BEST' });
+      // Use format selectors that give specific quality options
+      formats.push({ id: 'bestvideo[height<=2160]+bestaudio/best[height<=2160]', ext: 'mp4', quality: '2160p' });
+      formats.push({ id: 'bestvideo[height<=1440]+bestaudio/best[height<=1440]', ext: 'mp4', quality: '1440p' });
+      formats.push({ id: 'bestvideo[height<=1080]+bestaudio/best[height<=1080]', ext: 'mp4', quality: '1080p' });
+      formats.push({ id: 'bestvideo[height<=720]+bestaudio/best[height<=720]', ext: 'mp4', quality: '720p' });
+      formats.push({ id: 'bestvideo[height<=480]+bestaudio/best[height<=480]', ext: 'mp4', quality: '480p' });
+      formats.push({ id: 'bestvideo[height<=360]+bestaudio/best[height<=360]', ext: 'mp4', quality: '360p' });
     }
     
     // Limit to 6 formats to fit in keyboard
