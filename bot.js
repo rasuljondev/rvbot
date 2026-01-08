@@ -483,72 +483,55 @@ async function showYouTubeFormats(ctx, youtubeUrl) {
       console.log(`[${new Date().toISOString()}] Could not get video title`);
     }
     
-    // Parse formats and create buttons
-    // Format example: "137 mp4  1920x1080 1080p, video only, 5.20MiB"
-    // Or: "22 mp4  1280x720 720p, 2.50MiB"
+    // Parse formats to detect available qualities
+    // YouTube often provides separate video and audio streams, so we'll use format selectors
+    // that automatically combine them
     const formats = [];
-    const formatMap = new Map();
     const qualityOrder = ['2160p', '1440p', '1080p', '720p', '480p', '360p', '240p', '144p'];
+    const availableQualities = new Set();
     
-    // First, collect all formats with quality info
+    // Scan format list to see what qualities are available
     for (const line of formatLines) {
-      // Match format ID, extension, resolution, and quality
-      // Example formats:
-      // "137 mp4  1920x1080 1080p, video only, 5.20MiB"
-      // "22 mp4  1280x720 720p, 2.50MiB"
-      // "18 mp4  640x360 360p, 1.20MiB"
-      const match = line.match(/^(\d+)\s+(\w+)\s+.*?(\d+x\d+|\d+p)/i);
+      // Match resolution/quality info
+      // Example: "137 mp4  1920x1080 1080p, video only"
+      // Example: "22 mp4  1280x720 720p"
+      const match = line.match(/(\d+x\d+|\d+p)/i);
       if (match) {
-        const formatId = match[1];
-        const ext = match[2];
-        const resolution = match[3];
+        const resolution = match[1];
+        let quality = '';
         
-        // Check if it's audio-only or video-only (we want combined formats)
-        const isAudioOnly = line.toLowerCase().includes('audio only');
-        const isVideoOnly = line.toLowerCase().includes('video only');
+        if (resolution.includes('p')) {
+          quality = resolution.toUpperCase();
+        } else if (resolution.includes('x')) {
+          const height = parseInt(resolution.split('x')[1]);
+          if (height >= 2160) quality = '2160p';
+          else if (height >= 1440) quality = '1440p';
+          else if (height >= 1080) quality = '1080p';
+          else if (height >= 720) quality = '720p';
+          else if (height >= 480) quality = '480p';
+          else if (height >= 360) quality = '360p';
+          else if (height >= 240) quality = '240p';
+          else quality = '144p';
+        }
         
-        // Skip audio-only and video-only formats (we want combined)
-        if (!isAudioOnly && !isVideoOnly) {
-          // Extract quality (e.g., "1080p" from "1920x1080" or "1080p")
-          let quality = '';
-          if (resolution.includes('p')) {
-            quality = resolution.toUpperCase();
-          } else if (resolution.includes('x')) {
-            const height = parseInt(resolution.split('x')[1]);
-            if (height >= 2160) quality = '2160p';
-            else if (height >= 1440) quality = '1440p';
-            else if (height >= 1080) quality = '1080p';
-            else if (height >= 720) quality = '720p';
-            else if (height >= 480) quality = '480p';
-            else if (height >= 360) quality = '360p';
-            else if (height >= 240) quality = '240p';
-            else quality = '144p';
-          }
-          
-          if (quality && !formatMap.has(quality)) {
-            formats.push({ id: formatId, ext, quality });
-            formatMap.set(quality, formatId);
-          }
+        if (quality) {
+          availableQualities.add(quality);
         }
       }
     }
     
-    // Sort formats by quality (highest first)
-    formats.sort((a, b) => {
-      const aIndex = qualityOrder.indexOf(a.quality) !== -1 ? qualityOrder.indexOf(a.quality) : 999;
-      const bIndex = qualityOrder.indexOf(b.quality) !== -1 ? qualityOrder.indexOf(b.quality) : 999;
-      return aIndex - bIndex;
-    });
+    // Always use format selectors that combine video+audio automatically
+    // These work regardless of whether YouTube provides combined or separate streams
+    const allQualities = ['2160p', '1440p', '1080p', '720p', '480p', '360p'];
     
-    // If no combined formats found, use yt-dlp format selectors for specific qualities
-    if (formats.length === 0) {
-      // Use format selectors that give specific quality options
-      formats.push({ id: 'bestvideo[height<=2160]+bestaudio/best[height<=2160]', ext: 'mp4', quality: '2160p' });
-      formats.push({ id: 'bestvideo[height<=1440]+bestaudio/best[height<=1440]', ext: 'mp4', quality: '1440p' });
-      formats.push({ id: 'bestvideo[height<=1080]+bestaudio/best[height<=1080]', ext: 'mp4', quality: '1080p' });
-      formats.push({ id: 'bestvideo[height<=720]+bestaudio/best[height<=720]', ext: 'mp4', quality: '720p' });
-      formats.push({ id: 'bestvideo[height<=480]+bestaudio/best[height<=480]', ext: 'mp4', quality: '480p' });
-      formats.push({ id: 'bestvideo[height<=360]+bestaudio/best[height<=360]', ext: 'mp4', quality: '360p' });
+    // Only show qualities that are likely available (or show all common ones)
+    for (const quality of allQualities) {
+      // Use format selector that combines best video and audio for that quality
+      formats.push({ 
+        id: `bestvideo[height<=${quality.replace('p', '')}]+bestaudio/best[height<=${quality.replace('p', '')}]`, 
+        ext: 'mp4', 
+        quality 
+      });
     }
     
     // Limit to 6 formats to fit in keyboard
