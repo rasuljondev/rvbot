@@ -262,7 +262,7 @@ async function downloadInstagramMedia(ctx, messageText) {
       mediaInfo = null;
     }
 
-    // Determine media type
+    // Determine media type (for logging purposes)
     let isImage = false;
     if (mediaInfo) {
       // Check if it's an image based on format or ext
@@ -278,20 +278,20 @@ async function downloadInstagramMedia(ctx, messageText) {
       }
     }
 
-    // Generate unique filename
+    // Generate unique filename - let yt-dlp determine the extension
     const timestamp = Date.now();
-    const fileExtension = isImage ? 'jpg' : 'mp4';
-    const outputPath = path.join(tempDir, `media_${timestamp}.${fileExtension}`);
+    // Use %(ext)s to let yt-dlp determine the file extension automatically
+    const outputPath = path.join(tempDir, `media_${timestamp}.%(ext)s`);
     
     console.log(`[${new Date().toISOString()}] Starting download...`);
     console.log(`[${new Date().toISOString()}] URL: ${messageText}`);
-    console.log(`[${new Date().toISOString()}] Media type: ${isImage ? 'image' : 'video'}`);
-    console.log(`[${new Date().toISOString()}] Output path: ${outputPath}`);
+    console.log(`[${new Date().toISOString()}] Media type: ${isImage ? 'image' : 'video (or unknown)'}`);
+    console.log(`[${new Date().toISOString()}] Output path template: ${outputPath}`);
 
-    // Download media using yt-dlp
+    // Download media using yt-dlp - remove format selection to let yt-dlp auto-detect
+    // This works better for Instagram images and videos
     const ytDlpArgs = [
       messageText,
-      '-f', 'best',
       '-o', outputPath,
       '--no-playlist'
     ];
@@ -311,17 +311,24 @@ async function downloadInstagramMedia(ctx, messageText) {
     console.log(`[${new Date().toISOString()}] yt-dlp stdout:`, stdout);
     console.log(`[${new Date().toISOString()}] Download completed, checking file...`);
 
-    // Check if file exists and get its size
-    if (!fs.existsSync(outputPath)) {
-      console.error(`[${new Date().toISOString()}] Media file was not created at: ${outputPath}`);
+    // Find the actual downloaded file (yt-dlp replaces %(ext)s with actual extension)
+    // We need to search for files matching our pattern
+    const files = fs.readdirSync(tempDir);
+    const downloadedFile = files.find(file => file.startsWith(`media_${timestamp}.`));
+    
+    if (!downloadedFile) {
+      console.error(`[${new Date().toISOString()}] Media file was not created. Files in temp:`, files);
       throw new Error('Media file was not downloaded');
     }
 
+    const actualOutputPath = path.join(tempDir, downloadedFile);
+    console.log(`[${new Date().toISOString()}] Found downloaded file: ${actualOutputPath}`);
+
     // Detect actual file type from downloaded file
-    const actualFileExtension = path.extname(outputPath).toLowerCase().replace('.', '');
+    const actualFileExtension = path.extname(actualOutputPath).toLowerCase().replace('.', '');
     const actualIsImage = /jpg|jpeg|png|webp/i.test(actualFileExtension);
 
-    const stats = fs.statSync(outputPath);
+    const stats = fs.statSync(actualOutputPath);
     const fileSizeInMB = stats.size / (1024 * 1024);
     
     console.log(`[${new Date().toISOString()}] File downloaded successfully. Size: ${fileSizeInMB.toFixed(2)} MB, Type: ${actualIsImage ? 'image' : 'video'}`);
@@ -329,7 +336,7 @@ async function downloadInstagramMedia(ctx, messageText) {
     // Telegram has a 50MB file size limit for bots
     if (fileSizeInMB > 50) {
       console.log(`[${new Date().toISOString()}] File too large (${fileSizeInMB.toFixed(2)} MB), deleting...`);
-      fs.unlinkSync(outputPath);
+      fs.unlinkSync(actualOutputPath);
       await ctx.telegram.editMessageText(
         ctx.chat.id,
         processingMsg.message_id,
@@ -345,7 +352,7 @@ async function downloadInstagramMedia(ctx, messageText) {
     if (actualIsImage) {
       await ctx.telegram.sendPhoto(
         ctx.chat.id,
-        { source: outputPath },
+        { source: actualOutputPath },
         {
           reply_to_message_id: ctx.message.message_id
         }
@@ -354,7 +361,7 @@ async function downloadInstagramMedia(ctx, messageText) {
     } else {
       await ctx.telegram.sendVideo(
         ctx.chat.id,
-        { source: outputPath },
+        { source: actualOutputPath },
         {
           reply_to_message_id: ctx.message.message_id
         }
@@ -371,8 +378,8 @@ async function downloadInstagramMedia(ctx, messageText) {
 
     // Clean up temporary file
     try {
-      fs.unlinkSync(outputPath);
-      console.log(`[${new Date().toISOString()}] Temporary file deleted: ${outputPath}`);
+      fs.unlinkSync(actualOutputPath);
+      console.log(`[${new Date().toISOString()}] Temporary file deleted: ${actualOutputPath}`);
     } catch (err) {
       console.error(`[${new Date().toISOString()}] Error deleting temp file:`, err);
     }
@@ -513,10 +520,7 @@ bot.catch((err, ctx) => {
   ctx.reply('An error occurred. Please try again.');
 });
 
-// Set up bot commands menu (appears as buttons below message input)
-bot.telegram.setMyCommands([
-  { command: 'stats', description: 'View bot statistics (admin only)' }
-]);
+// Bot commands menu removed - bot now works with direct link sharing only
 
 // Start the bot
 bot.launch().then(async () => {
