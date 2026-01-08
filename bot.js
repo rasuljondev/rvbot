@@ -200,6 +200,9 @@ console.log(`[${new Date().toISOString()}] Using yt-dlp at: ${finalYtDlpPath}`);
 const ytDlpWrap = new YTDlpWrap(finalYtDlpPath);
 
 
+// Store user states for YouTube format selection
+const userStates = new Map();
+
 // Create temp directory if it doesn't exist
 const tempDir = path.join(__dirname, 'temp');
 if (!fs.existsSync(tempDir)) {
@@ -442,6 +445,261 @@ async function downloadInstagramMedia(ctx, messageText) {
 }
 
 
+// Helper function to get YouTube formats and show them as buttons
+async function showYouTubeFormats(ctx, youtubeUrl) {
+  console.log(`[${new Date().toISOString()}] Getting YouTube formats for: ${youtubeUrl}`);
+  
+  const processingMsg = await ctx.reply('Getting available formats... Please wait.');
+  
+  try {
+    // Get video info and formats
+    const infoArgs = [
+      youtubeUrl,
+      '--list-formats',
+      '--no-playlist'
+    ];
+    
+    console.log(`[${new Date().toISOString()}] Running yt-dlp to list formats...`);
+    const formatListOutput = await ytDlpWrap.execPromise(infoArgs);
+    
+    // Parse format list to extract available formats
+    const formatLines = formatListOutput.split('\n').filter(line => 
+      line.trim() && /^\d+/.test(line.trim())
+    );
+    
+    // Get video info for title
+    const infoArgs2 = [
+      youtubeUrl,
+      '--print-json',
+      '--no-playlist'
+    ];
+    
+    let videoTitle = 'YouTube Video';
+    try {
+      const videoInfo = await ytDlpWrap.execPromise(infoArgs2);
+      const info = JSON.parse(videoInfo);
+      videoTitle = info.title || 'YouTube Video';
+    } catch (e) {
+      console.log(`[${new Date().toISOString()}] Could not get video title`);
+    }
+    
+    // Parse formats and create buttons
+    // Format example: "137 mp4  1920x1080 1080p, video only, 5.20MiB"
+    // Or: "22 mp4  1280x720 720p, 2.50MiB"
+    const formats = [];
+    const formatMap = new Map();
+    const qualityOrder = ['2160p', '1440p', '1080p', '720p', '480p', '360p', '240p', '144p'];
+    
+    // First, collect all formats with quality info
+    for (const line of formatLines) {
+      // Match format ID, extension, resolution, and quality
+      const match = line.match(/^(\d+)\s+(\w+)\s+.*?(\d+x\d+|\d+p).*?(audio only|video only|,)/i);
+      if (match) {
+        const formatId = match[1];
+        const ext = match[2];
+        const resolution = match[3];
+        const type = match[4] ? match[4].toLowerCase() : '';
+        
+        // Skip audio-only and video-only formats (we want combined)
+        if (!type.includes('audio only') && !type.includes('video only')) {
+          // Extract quality (e.g., "1080p" from "1920x1080" or "1080p")
+          let quality = '';
+          if (resolution.includes('p')) {
+            quality = resolution.toUpperCase();
+          } else if (resolution.includes('x')) {
+            const height = parseInt(resolution.split('x')[1]);
+            if (height >= 2160) quality = '2160p';
+            else if (height >= 1440) quality = '1440p';
+            else if (height >= 1080) quality = '1080p';
+            else if (height >= 720) quality = '720p';
+            else if (height >= 480) quality = '480p';
+            else if (height >= 360) quality = '360p';
+            else if (height >= 240) quality = '240p';
+            else quality = '144p';
+          }
+          
+          if (quality && !formatMap.has(quality)) {
+            formats.push({ id: formatId, ext, quality });
+            formatMap.set(quality, formatId);
+          }
+        }
+      }
+    }
+    
+    // Sort formats by quality (highest first)
+    formats.sort((a, b) => {
+      const aIndex = qualityOrder.indexOf(a.quality) !== -1 ? qualityOrder.indexOf(a.quality) : 999;
+      const bIndex = qualityOrder.indexOf(b.quality) !== -1 ? qualityOrder.indexOf(b.quality) : 999;
+      return aIndex - bIndex;
+    });
+    
+    // If no combined formats found, use yt-dlp format selectors
+    if (formats.length === 0) {
+      formats.push({ id: 'best', ext: 'mp4', quality: 'BEST' });
+      formats.push({ id: 'worst', ext: 'mp4', quality: 'WORST' });
+    } else {
+      // Add "BEST" option at the beginning
+      formats.unshift({ id: 'best', ext: 'mp4', quality: 'BEST' });
+    }
+    
+    // Limit to 6 formats to fit in keyboard
+    const displayFormats = formats.slice(0, 6);
+    
+    // Create keyboard buttons (2 per row)
+    const buttons = [];
+    for (let i = 0; i < displayFormats.length; i += 2) {
+      const row = [];
+      row.push(Markup.button.text(displayFormats[i].quality));
+      if (i + 1 < displayFormats.length) {
+        row.push(Markup.button.text(displayFormats[i + 1].quality));
+      }
+      buttons.push(row);
+    }
+    
+    // Store format mapping in user state
+    const formatMapping = {};
+    displayFormats.forEach(f => {
+      formatMapping[f.quality] = f.id;
+    });
+    
+    userStates.set(ctx.from.id, {
+      type: 'youtube_format_selection',
+      url: youtubeUrl,
+      formats: formatMapping,
+      title: videoTitle
+    });
+    
+    // Delete processing message
+    await ctx.telegram.deleteMessage(ctx.chat.id, processingMsg.message_id);
+    
+    // Show format selection
+    await ctx.reply(
+      `📹 ${videoTitle}\n\nSelect a video format:`,
+      Markup.keyboard(buttons).resize().oneTime()
+    );
+    
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] Error getting YouTube formats:`, error);
+    try {
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        processingMsg.message_id,
+        null,
+        'Sorry, I couldn\'t get the available formats. Please check if the link is valid.'
+      );
+    } catch (err) {
+      ctx.reply('Sorry, I couldn\'t get the available formats. Please check if the link is valid.');
+    }
+  }
+}
+
+// Helper function to download YouTube video with selected format
+async function downloadYouTubeVideo(ctx, formatId, youtubeUrl, videoTitle) {
+  console.log(`[${new Date().toISOString()}] Downloading YouTube video with format: ${formatId}`);
+  
+  const processingMsg = await ctx.reply('Downloading video... Please wait.');
+  
+  try {
+    const timestamp = Date.now();
+    const outputPath = path.join(tempDir, `youtube_${timestamp}.%(ext)s`);
+    
+    const ytDlpArgs = [
+      youtubeUrl,
+      '-f', formatId,
+      '-o', outputPath,
+      '--no-playlist'
+    ];
+    
+    console.log(`[${new Date().toISOString()}] Running yt-dlp with args:`, ytDlpArgs);
+    
+    const stdout = await ytDlpWrap.execPromise(ytDlpArgs);
+    console.log(`[${new Date().toISOString()}] yt-dlp stdout:`, stdout);
+    
+    // Find the downloaded file
+    const files = fs.readdirSync(tempDir);
+    const downloadedFile = files.find(file => file.startsWith(`youtube_${timestamp}.`));
+    
+    if (!downloadedFile) {
+      throw new Error('Video file was not downloaded');
+    }
+    
+    const actualOutputPath = path.join(tempDir, downloadedFile);
+    console.log(`[${new Date().toISOString()}] Found downloaded file: ${actualOutputPath}`);
+    
+    const stats = fs.statSync(actualOutputPath);
+    const fileSizeInMB = stats.size / (1024 * 1024);
+    
+    console.log(`[${new Date().toISOString()}] File downloaded successfully. Size: ${fileSizeInMB.toFixed(2)} MB`);
+    
+    // Telegram has a 50MB file size limit for bots
+    if (fileSizeInMB > 50) {
+      console.log(`[${new Date().toISOString()}] File too large (${fileSizeInMB.toFixed(2)} MB), deleting...`);
+      fs.unlinkSync(actualOutputPath);
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        processingMsg.message_id,
+        null,
+        'File is too large (over 50MB). Telegram bots cannot send files larger than 50MB.'
+      );
+      return;
+    }
+    
+    console.log(`[${new Date().toISOString()}] Sending video to user...`);
+    
+    // Send video file
+    await ctx.telegram.sendVideo(
+      ctx.chat.id,
+      { source: actualOutputPath },
+      {
+        caption: `📹 ${videoTitle}`,
+        reply_to_message_id: ctx.message.message_id
+      }
+    );
+    
+    console.log(`[${new Date().toISOString()}] Video sent successfully`);
+    
+    // Delete processing message
+    await ctx.telegram.deleteMessage(ctx.chat.id, processingMsg.message_id);
+    
+    // Show success message
+    await ctx.reply(`✅ Video downloaded successfully!\n\nSend another link to download more.`, removeKeyboard());
+    
+    // Clean up temporary file
+    try {
+      fs.unlinkSync(actualOutputPath);
+      console.log(`[${new Date().toISOString()}] Temporary file deleted: ${actualOutputPath}`);
+    } catch (err) {
+      console.error(`[${new Date().toISOString()}] Error deleting temp file:`, err);
+    }
+    
+    // Clear user state
+    userStates.delete(ctx.from.id);
+    
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] Error downloading YouTube video:`);
+    console.error(`[${new Date().toISOString()}] Error type:`, error.constructor.name);
+    console.error(`[${new Date().toISOString()}] Error message:`, error.message);
+    
+    if (error.stderr) {
+      console.error(`[${new Date().toISOString()}] yt-dlp stderr:`, error.stderr);
+    }
+    
+    try {
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        processingMsg.message_id,
+        null,
+        'Sorry, I couldn\'t download the video. Please try selecting a different format.'
+      );
+    } catch (err) {
+      ctx.reply('Sorry, I couldn\'t download the video. Please try selecting a different format.');
+    }
+    
+    // Clear user state on error
+    userStates.delete(ctx.from.id);
+  }
+}
+
 // Helper function to create admin status keyboard (Reply Keyboard Markup)
 function createAdminStatusKeyboard() {
   return Markup.keyboard([
@@ -469,17 +727,17 @@ bot.start(async (ctx) => {
   
   if (userType === 'admin') {
     const stats = getStats();
-    greetingMessage = `👋 Hello Admin!\n\n📊 Bot Statistics:\n• Total Users: ${stats.totalUsers}\n• New Users Today: ${stats.newUsersToday}\n\nPlease share an Instagram link to download.`;
+    greetingMessage = `👋 Hello Admin!\n\n📊 Bot Statistics:\n• Total Users: ${stats.totalUsers}\n• New Users Today: ${stats.newUsersToday}\n\nI can help you download:\n• Instagram videos and images\n• YouTube videos (with format selection)\n\nPlease share a link to download.`;
     await ctx.reply(greetingMessage, createAdminStatusKeyboard());
   } else if (userType === 'existing') {
-    greetingMessage = `👋 Welcome back!\n\nI can help you download Instagram videos and images.\n\nPlease share an Instagram link to download.`;
+    greetingMessage = `👋 Welcome back!\n\nI can help you download:\n• Instagram videos and images\n• YouTube videos (with format selection)\n\nPlease share a link to download.`;
     await ctx.reply(greetingMessage, removeKeyboard());
   } else if (userType === 'new') {
-    greetingMessage = `👋 Welcome! Nice to meet you!\n\nI'm a bot that can help you download Instagram videos and images.\n\nPlease share an Instagram link to download.`;
+    greetingMessage = `👋 Welcome! Nice to meet you!\n\nI'm a bot that can help you download:\n• Instagram videos and images\n• YouTube videos (with format selection)\n\nPlease share a link to download.`;
     await ctx.reply(greetingMessage, removeKeyboard());
   } else {
     // Fallback for general users
-    greetingMessage = `Hi! I can help you download Instagram videos and images.\n\nPlease share an Instagram link to download.`;
+    greetingMessage = `Hi! I can help you download:\n• Instagram videos and images\n• YouTube videos (with format selection)\n\nPlease share a link to download.`;
     await ctx.reply(greetingMessage, removeKeyboard());
   }
 });
@@ -526,7 +784,7 @@ bot.command('stats', (ctx) => {
 });
 
 
-// Message handler for Instagram links and admin status button
+// Message handler for Instagram links, YouTube links, and admin status button
 bot.on('text', async (ctx) => {
   const userId = ctx.from.id;
   const messageText = ctx.message.text;
@@ -540,9 +798,36 @@ bot.on('text', async (ctx) => {
     return;
   }
 
+  // Check if user is selecting a YouTube format
+  const userState = userStates.get(userId);
+  if (userState && userState.type === 'youtube_format_selection') {
+    const selectedFormat = userState.formats[messageText];
+    if (selectedFormat) {
+      // User selected a format, download the video
+      await downloadYouTubeVideo(ctx, selectedFormat, userState.url, userState.title);
+      return;
+    } else {
+      // Invalid selection, clear state and ask to try again
+      userStates.delete(userId);
+      ctx.reply('Invalid format selection. Please send a valid YouTube link to try again.', removeKeyboard());
+      return;
+    }
+  }
+
+  // Check if it's a YouTube URL pattern
+  const youtubeUrlPattern = /^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\/.+/i;
+  const isYouTubeLink = youtubeUrlPattern.test(messageText);
+
   // Check if it's an Instagram URL pattern (auto-detect)
   const instagramUrlPattern = /^https?:\/\/(www\.)?(instagram\.com|instagr\.am)\/.+/i;
   const isInstagramLink = instagramUrlPattern.test(messageText);
+
+  // Handle YouTube links - show format selection
+  if (isYouTubeLink) {
+    console.log(`[${new Date().toISOString()}] Auto-detected YouTube link from user ${userId}`);
+    await showYouTubeFormats(ctx, messageText);
+    return;
+  }
 
   // Auto-detect and download Instagram links
   if (isInstagramLink) {
