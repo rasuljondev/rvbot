@@ -199,8 +199,6 @@ const finalYtDlpPath = (ytDlpPath === 'python')
 console.log(`[${new Date().toISOString()}] Using yt-dlp at: ${finalYtDlpPath}`);
 const ytDlpWrap = new YTDlpWrap(finalYtDlpPath);
 
-// Store user states to track when they're waiting for Instagram links
-const userStates = new Map();
 
 // Create temp directory if it doesn't exist
 const tempDir = path.join(__dirname, 'temp');
@@ -367,9 +365,9 @@ async function downloadInstagramMedia(ctx, messageText) {
     // Delete processing message
     await ctx.telegram.deleteMessage(ctx.chat.id, processingMsg.message_id);
 
-    // Show menu after successful download
+    // Show success message
     const mediaType = actualIsImage ? 'Image' : 'Video';
-    await ctx.reply(`✅ ${mediaType} downloaded successfully!\n\nUse /menu to access the menu again.`, createMenuKeyboard(ctx.from.id));
+    await ctx.reply(`✅ ${mediaType} downloaded successfully!\n\nSend another Instagram link to download more.`);
 
     // Clean up temporary file
     try {
@@ -404,20 +402,6 @@ async function downloadInstagramMedia(ctx, messageText) {
   }
 }
 
-// Helper function to create menu keyboard
-function createMenuKeyboard(userId) {
-  const buttons = [
-    [Markup.button.callback('📥 Insta', 'menu_insta')],
-    [Markup.button.callback('🎬 Kino', 'menu_kino')]
-  ];
-  
-  // Add stats button for admin
-  if (ADMIN_ID && userId === ADMIN_ID) {
-    buttons.push([Markup.button.callback('📊 Statistics', 'menu_stats')]);
-  }
-  
-  return Markup.inlineKeyboard(buttons);
-}
 
 // Helper function to create admin status keyboard (Reply Keyboard Markup)
 function createAdminStatusKeyboard() {
@@ -446,38 +430,21 @@ bot.start(async (ctx) => {
   
   if (userType === 'admin') {
     const stats = getStats();
-    greetingMessage = `👋 Hello Admin!\n\n📊 Bot Statistics:\n• Total Users: ${stats.totalUsers}\n• New Users Today: ${stats.newUsersToday}\n\nUse the status button below or /menu to access the menu.`;
+    greetingMessage = `👋 Hello Admin!\n\n📊 Bot Statistics:\n• Total Users: ${stats.totalUsers}\n• New Users Today: ${stats.newUsersToday}\n\nPlease share an Instagram link to download.`;
     await ctx.reply(greetingMessage, createAdminStatusKeyboard());
   } else if (userType === 'existing') {
-    greetingMessage = `👋 Welcome back!\n\nI can help you download Instagram videos, images, and movies.\n\nPlease share an Instagram link to download.`;
+    greetingMessage = `👋 Welcome back!\n\nI can help you download Instagram videos and images.\n\nPlease share an Instagram link to download.`;
     await ctx.reply(greetingMessage, removeKeyboard());
-    await ctx.reply('📋 Menu:', createMenuKeyboard(userId));
   } else if (userType === 'new') {
-    greetingMessage = `👋 Welcome! Nice to meet you!\n\nI'm a bot that can help you download:\n• Instagram videos\n• Instagram images\n• Movies (coming soon)\n\nPlease share an Instagram link to download.`;
+    greetingMessage = `👋 Welcome! Nice to meet you!\n\nI'm a bot that can help you download Instagram videos and images.\n\nPlease share an Instagram link to download.`;
     await ctx.reply(greetingMessage, removeKeyboard());
-    await ctx.reply('📋 Menu:', createMenuKeyboard(userId));
   } else {
     // Fallback for general users
-    greetingMessage = `Hi! I can help you download Instagram videos, images, and movies.\n\nPlease share an Instagram link to download.`;
+    greetingMessage = `Hi! I can help you download Instagram videos and images.\n\nPlease share an Instagram link to download.`;
     await ctx.reply(greetingMessage, removeKeyboard());
-    await ctx.reply('📋 Menu:', createMenuKeyboard(userId));
   }
 });
 
-// Menu command handler
-bot.command('menu', (ctx) => {
-  // Track user
-  const userType = addUser(ctx.from.id, ctx.from.username, ctx.from.first_name, ctx.from.last_name);
-  
-  const menuMessage = '📋 Main Menu\n\nSelect an option:';
-  
-  // Show admin keyboard for admin, remove keyboard for others
-  if (userType === 'admin') {
-    ctx.reply(menuMessage, createMenuKeyboard(ctx.from.id));
-  } else {
-    ctx.reply(menuMessage, createMenuKeyboard(ctx.from.id));
-  }
-});
 
 // Function to show statistics
 function showStats(ctx) {
@@ -513,59 +480,10 @@ bot.command('stats', (ctx) => {
   showStats(ctx);
 });
 
-// Menu button callback handlers
-bot.action('menu_insta', (ctx) => {
-  ctx.answerCbQuery();
-  // Track user
-  addUser(ctx.from.id, ctx.from.username, ctx.from.first_name, ctx.from.last_name);
-  
-  // Set user state to waiting for Instagram link
-  userStates.set(ctx.from.id, 'waiting_for_insta_link');
-  ctx.reply('Please send me an Instagram link (image or video):');
-});
-
-bot.action('menu_kino', (ctx) => {
-  ctx.answerCbQuery();
-  // Track user
-  addUser(ctx.from.id, ctx.from.username, ctx.from.first_name, ctx.from.last_name);
-  ctx.reply('Coming soon', createMenuKeyboard(ctx.from.id));
-});
-
-bot.action('menu_stats', (ctx) => {
-  ctx.answerCbQuery();
-  
-  // Check if user is admin
-  if (!ADMIN_ID || ctx.from.id !== ADMIN_ID) {
-    ctx.reply('This command is only available for administrators.');
-    return;
-  }
-  
-  // Track user
-  addUser(ctx.from.id, ctx.from.username, ctx.from.first_name, ctx.from.last_name);
-  showStats(ctx);
-});
-
-// Kino command handler
-bot.command('kino', (ctx) => {
-  // Track user
-  addUser(ctx.from.id, ctx.from.username, ctx.from.first_name, ctx.from.last_name);
-  ctx.reply('Coming soon', createMenuKeyboard(ctx.from.id));
-});
-
-// Insta command handler
-bot.command('insta', (ctx) => {
-  // Track user
-  addUser(ctx.from.id, ctx.from.username, ctx.from.first_name, ctx.from.last_name);
-  
-  // Set user state to waiting for Instagram link
-  userStates.set(ctx.from.id, 'waiting_for_insta_link');
-  ctx.reply('Please send me an Instagram link (image or video):');
-});
 
 // Message handler for Instagram links and admin status button
 bot.on('text', async (ctx) => {
   const userId = ctx.from.id;
-  const userState = userStates.get(userId);
   const messageText = ctx.message.text;
 
   // Track user
@@ -577,20 +495,12 @@ bot.on('text', async (ctx) => {
     return;
   }
 
-  // Check if it's an Instagram URL pattern
+  // Check if it's an Instagram URL pattern (auto-detect)
   const instagramUrlPattern = /^https?:\/\/(www\.)?(instagram\.com|instagr\.am)\/.+/i;
   const isInstagramLink = instagramUrlPattern.test(messageText);
 
-  // If user used /insta command, they're waiting for a link
-  if (userState === 'waiting_for_insta_link') {
-    // Reset user state
-    userStates.delete(userId);
-    
-    // Download the media
-    await downloadInstagramMedia(ctx, messageText);
-  } 
-  // If user just shared an Instagram link directly (auto-detect)
-  else if (isInstagramLink) {
+  // Auto-detect and download Instagram links
+  if (isInstagramLink) {
     console.log(`[${new Date().toISOString()}] Auto-detected Instagram link from user ${userId}`);
     // Download the media automatically
     await downloadInstagramMedia(ctx, messageText);
@@ -605,9 +515,6 @@ bot.catch((err, ctx) => {
 
 // Set up bot commands menu (appears as buttons below message input)
 bot.telegram.setMyCommands([
-  { command: 'menu', description: 'Open main menu' },
-  { command: 'insta', description: 'Download Instagram videos' },
-  { command: 'kino', description: 'Download movies (coming soon)' },
   { command: 'stats', description: 'View bot statistics (admin only)' }
 ]);
 
@@ -620,7 +527,7 @@ bot.launch().then(async () => {
   if (ADMIN_ID) {
     try {
       const stats = getStats();
-      const greetingMessage = `🤖 Bot Started Successfully!\n\n📊 Current Statistics:\n• Total Users: ${stats.totalUsers}\n• New Users Today: ${stats.newUsersToday}\n\nUse /menu or /stats to view detailed statistics.`;
+      const greetingMessage = `🤖 Bot Started Successfully!\n\n📊 Current Statistics:\n• Total Users: ${stats.totalUsers}\n• New Users Today: ${stats.newUsersToday}\n\nUse /stats to view detailed statistics.`;
       await bot.telegram.sendMessage(ADMIN_ID, greetingMessage);
       console.log(`[${new Date().toISOString()}] Admin notification sent`);
     } catch (error) {
