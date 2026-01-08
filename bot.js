@@ -39,7 +39,41 @@ function saveUsers(usersData) {
 }
 
 // Add or update user
+// Returns: 'admin', 'new', or 'existing'
 function addUser(userId, username, firstName, lastName) {
+  // Check if user is admin
+  if (ADMIN_ID && userId === ADMIN_ID) {
+    const usersData = loadUsers();
+    const today = new Date().toDateString();
+    
+    // Reset daily counter if it's a new day
+    if (usersData.lastResetDate !== today) {
+      usersData.newUsersToday = 0;
+      usersData.lastResetDate = today;
+    }
+    
+    // Update admin info if needed
+    const existingUser = usersData.users.find(u => u.id === userId);
+    if (existingUser) {
+      existingUser.username = username || existingUser.username;
+      existingUser.firstName = firstName || existingUser.firstName;
+      existingUser.lastName = lastName || existingUser.lastName;
+      saveUsers(usersData);
+    } else {
+      // Admin not in users list yet, add them
+      usersData.users.push({
+        id: userId,
+        username: username || null,
+        firstName: firstName || null,
+        lastName: lastName || null,
+        firstSeen: new Date().toISOString()
+      });
+      saveUsers(usersData);
+    }
+    
+    return 'admin';
+  }
+  
   const usersData = loadUsers();
   const today = new Date().toDateString();
   
@@ -62,7 +96,7 @@ function addUser(userId, username, firstName, lastName) {
     });
     usersData.newUsersToday++;
     saveUsers(usersData);
-    return true; // New user
+    return 'new';
   }
   
   // Update existing user info
@@ -70,7 +104,7 @@ function addUser(userId, username, firstName, lastName) {
   existingUser.firstName = firstName || existingUser.firstName;
   existingUser.lastName = lastName || existingUser.lastName;
   saveUsers(usersData);
-  return false; // Existing user
+  return 'existing';
 }
 
 // Get statistics
@@ -174,8 +208,8 @@ if (!fs.existsSync(tempDir)) {
   fs.mkdirSync(tempDir, { recursive: true });
 }
 
-// Helper function to download Instagram video (reusable)
-async function downloadInstagramVideo(ctx, messageText) {
+// Helper function to download Instagram media (images and videos)
+async function downloadInstagramMedia(ctx, messageText) {
   console.log(`[${new Date().toISOString()}] User ${ctx.from.id} sent message: ${messageText}`);
   
   // Validate Instagram URL
@@ -190,18 +224,9 @@ async function downloadInstagramVideo(ctx, messageText) {
   console.log(`[${new Date().toISOString()}] Valid Instagram URL received: ${messageText}`);
 
   // Send processing message
-  const processingMsg = await ctx.reply('Downloading video... Please wait.');
+  const processingMsg = await ctx.reply('Downloading media... Please wait.');
 
   try {
-    // Generate unique filename
-    const timestamp = Date.now();
-    const outputPath = path.join(tempDir, `video_${timestamp}.mp4`);
-    
-    console.log(`[${new Date().toISOString()}] Starting download...`);
-    console.log(`[${new Date().toISOString()}] URL: ${messageText}`);
-    console.log(`[${new Date().toISOString()}] Output path: ${outputPath}`);
-    console.log(`[${new Date().toISOString()}] yt-dlp binary path: ${ytDlpWrap.getBinaryPath()}`);
-
     // Check if yt-dlp binary exists (skip check if it's a command name in PATH)
     const binaryPath = ytDlpWrap.getBinaryPath();
     const isCommandName = !binaryPath.includes('/') && !binaryPath.includes('\\') && !binaryPath.endsWith('.exe');
@@ -210,7 +235,62 @@ async function downloadInstagramVideo(ctx, messageText) {
       throw new Error(`yt-dlp binary not found at ${binaryPath}. Please install yt-dlp.`);
     }
 
-    // Download video using yt-dlp
+    // First, get media info to determine if it's an image or video
+    const infoArgs = [
+      messageText,
+      '--print-json',
+      '--no-playlist'
+    ];
+    
+    // Add cookies file if it exists
+    const cookiesPath = path.join(__dirname, 'cookies.txt');
+    if (fs.existsSync(cookiesPath)) {
+      infoArgs.push('--cookies', cookiesPath);
+      console.log(`[${new Date().toISOString()}] Using cookies file: ${cookiesPath}`);
+    }
+    
+    // Add user-agent for better compatibility
+    infoArgs.push('--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    
+    console.log(`[${new Date().toISOString()}] Getting media info...`);
+    let mediaInfo;
+    try {
+      const infoOutput = await ytDlpWrap.execPromise(infoArgs);
+      mediaInfo = JSON.parse(infoOutput);
+    } catch (error) {
+      // If JSON parsing fails, try to extract from stderr or use fallback
+      console.log(`[${new Date().toISOString()}] Could not parse JSON, trying alternative method...`);
+      // Continue with download and detect from file extension
+      mediaInfo = null;
+    }
+
+    // Determine media type
+    let isImage = false;
+    if (mediaInfo) {
+      // Check if it's an image based on format or ext
+      const ext = mediaInfo.ext || '';
+      const format = mediaInfo.format || '';
+      isImage = /jpg|jpeg|png|webp/i.test(ext) || /image/i.test(format);
+      
+      // Also check entries for carousel posts
+      if (mediaInfo.entries && mediaInfo.entries.length > 0) {
+        const firstEntry = mediaInfo.entries[0];
+        const entryExt = firstEntry.ext || '';
+        isImage = /jpg|jpeg|png|webp/i.test(entryExt);
+      }
+    }
+
+    // Generate unique filename
+    const timestamp = Date.now();
+    const fileExtension = isImage ? 'jpg' : 'mp4';
+    const outputPath = path.join(tempDir, `media_${timestamp}.${fileExtension}`);
+    
+    console.log(`[${new Date().toISOString()}] Starting download...`);
+    console.log(`[${new Date().toISOString()}] URL: ${messageText}`);
+    console.log(`[${new Date().toISOString()}] Media type: ${isImage ? 'image' : 'video'}`);
+    console.log(`[${new Date().toISOString()}] Output path: ${outputPath}`);
+
+    // Download media using yt-dlp
     const ytDlpArgs = [
       messageText,
       '-f', 'best',
@@ -219,12 +299,8 @@ async function downloadInstagramVideo(ctx, messageText) {
     ];
     
     // Add cookies file if it exists
-    const cookiesPath = path.join(__dirname, 'cookies.txt');
     if (fs.existsSync(cookiesPath)) {
       ytDlpArgs.push('--cookies', cookiesPath);
-      console.log(`[${new Date().toISOString()}] Using cookies file: ${cookiesPath}`);
-    } else {
-      console.log(`[${new Date().toISOString()}] No cookies configured - trying without cookies`);
     }
     
     // Add user-agent for better compatibility
@@ -239,14 +315,18 @@ async function downloadInstagramVideo(ctx, messageText) {
 
     // Check if file exists and get its size
     if (!fs.existsSync(outputPath)) {
-      console.error(`[${new Date().toISOString()}] Video file was not created at: ${outputPath}`);
-      throw new Error('Video file was not downloaded');
+      console.error(`[${new Date().toISOString()}] Media file was not created at: ${outputPath}`);
+      throw new Error('Media file was not downloaded');
     }
+
+    // Detect actual file type from downloaded file
+    const actualFileExtension = path.extname(outputPath).toLowerCase().replace('.', '');
+    const actualIsImage = /jpg|jpeg|png|webp/i.test(actualFileExtension);
 
     const stats = fs.statSync(outputPath);
     const fileSizeInMB = stats.size / (1024 * 1024);
     
-    console.log(`[${new Date().toISOString()}] File downloaded successfully. Size: ${fileSizeInMB.toFixed(2)} MB`);
+    console.log(`[${new Date().toISOString()}] File downloaded successfully. Size: ${fileSizeInMB.toFixed(2)} MB, Type: ${actualIsImage ? 'image' : 'video'}`);
 
     // Telegram has a 50MB file size limit for bots
     if (fileSizeInMB > 50) {
@@ -256,29 +336,40 @@ async function downloadInstagramVideo(ctx, messageText) {
         ctx.chat.id,
         processingMsg.message_id,
         null,
-        'Video file is too large (over 50MB). Telegram bots cannot send files larger than 50MB.'
+        'File is too large (over 50MB). Telegram bots cannot send files larger than 50MB.'
       );
       return;
     }
 
-    console.log(`[${new Date().toISOString()}] Sending video to user...`);
+    console.log(`[${new Date().toISOString()}] Sending media to user...`);
     
-    // Send video file
-    await ctx.telegram.sendVideo(
-      ctx.chat.id,
-      { source: outputPath },
-      {
-        reply_to_message_id: ctx.message.message_id
-      }
-    );
-
-    console.log(`[${new Date().toISOString()}] Video sent successfully`);
+    // Send media file based on type
+    if (actualIsImage) {
+      await ctx.telegram.sendPhoto(
+        ctx.chat.id,
+        { source: outputPath },
+        {
+          reply_to_message_id: ctx.message.message_id
+        }
+      );
+      console.log(`[${new Date().toISOString()}] Image sent successfully`);
+    } else {
+      await ctx.telegram.sendVideo(
+        ctx.chat.id,
+        { source: outputPath },
+        {
+          reply_to_message_id: ctx.message.message_id
+        }
+      );
+      console.log(`[${new Date().toISOString()}] Video sent successfully`);
+    }
 
     // Delete processing message
     await ctx.telegram.deleteMessage(ctx.chat.id, processingMsg.message_id);
 
     // Show menu after successful download
-    await ctx.reply('✅ Video downloaded successfully!\n\nUse /menu to access the menu again.', createMenuKeyboard(ctx.from.id));
+    const mediaType = actualIsImage ? 'Image' : 'Video';
+    await ctx.reply(`✅ ${mediaType} downloaded successfully!\n\nUse /menu to access the menu again.`, createMenuKeyboard(ctx.from.id));
 
     // Clean up temporary file
     try {
@@ -289,7 +380,7 @@ async function downloadInstagramVideo(ctx, messageText) {
     }
 
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] Error downloading video:`);
+    console.error(`[${new Date().toISOString()}] Error downloading media:`);
     console.error(`[${new Date().toISOString()}] Error type:`, error.constructor.name);
     console.error(`[${new Date().toISOString()}] Error message:`, error.message);
     console.error(`[${new Date().toISOString()}] Error stack:`, error.stack);
@@ -304,11 +395,11 @@ async function downloadInstagramVideo(ctx, messageText) {
         ctx.chat.id,
         processingMsg.message_id,
         null,
-        'Sorry, I couldn\'t download the video. Please check if the link is valid and the video is public.'
+        'Sorry, I couldn\'t download the media. Please check if the link is valid and the content is public.'
       );
     } catch (err) {
       console.error(`[${new Date().toISOString()}] Error editing message:`, err);
-      ctx.reply('Sorry, I couldn\'t download the video. Please check if the link is valid and the video is public.');
+      ctx.reply('Sorry, I couldn\'t download the media. Please check if the link is valid and the content is public.');
     }
   }
 }
@@ -328,6 +419,18 @@ function createMenuKeyboard(userId) {
   return Markup.inlineKeyboard(buttons);
 }
 
+// Helper function to create admin status keyboard (Reply Keyboard Markup)
+function createAdminStatusKeyboard() {
+  return Markup.keyboard([
+    ['📊 Bot Status']
+  ]).resize();
+}
+
+// Helper function to remove keyboard
+function removeKeyboard() {
+  return Markup.removeKeyboard();
+}
+
 // Start command handler
 bot.start(async (ctx) => {
   const userId = ctx.from.id;
@@ -335,27 +438,45 @@ bot.start(async (ctx) => {
   const firstName = ctx.from.first_name;
   const lastName = ctx.from.last_name;
   
-  // Add user to tracking
-  const isNewUser = addUser(userId, username, firstName, lastName);
+  // Add user to tracking and get user type
+  const userType = addUser(userId, username, firstName, lastName);
   
-  // If admin, show special message
-  if (ADMIN_ID && userId === ADMIN_ID) {
+  // Personalized greetings based on user type
+  let greetingMessage = '';
+  
+  if (userType === 'admin') {
     const stats = getStats();
-    const adminMessage = `👋 Welcome back, Admin!\n\n📊 Bot Statistics:\n• Total Users: ${stats.totalUsers}\n• New Users Today: ${stats.newUsersToday}\n\nUse /menu to access the menu anytime.`;
-    await ctx.reply(adminMessage);
+    greetingMessage = `👋 Hello Admin!\n\n📊 Bot Statistics:\n• Total Users: ${stats.totalUsers}\n• New Users Today: ${stats.newUsersToday}\n\nUse the status button below or /menu to access the menu.`;
+    await ctx.reply(greetingMessage, createAdminStatusKeyboard());
+  } else if (userType === 'existing') {
+    greetingMessage = `👋 Welcome back!\n\nI can help you download Instagram videos, images, and movies.\n\nPlease share an Instagram link to download.`;
+    await ctx.reply(greetingMessage, removeKeyboard());
+    await ctx.reply('📋 Menu:', createMenuKeyboard(userId));
+  } else if (userType === 'new') {
+    greetingMessage = `👋 Welcome! Nice to meet you!\n\nI'm a bot that can help you download:\n• Instagram videos\n• Instagram images\n• Movies (coming soon)\n\nPlease share an Instagram link to download.`;
+    await ctx.reply(greetingMessage, removeKeyboard());
+    await ctx.reply('📋 Menu:', createMenuKeyboard(userId));
+  } else {
+    // Fallback for general users
+    greetingMessage = `Hi! I can help you download Instagram videos, images, and movies.\n\nPlease share an Instagram link to download.`;
+    await ctx.reply(greetingMessage, removeKeyboard());
+    await ctx.reply('📋 Menu:', createMenuKeyboard(userId));
   }
-  
-  const introMessage = 'Hi! I can help you download Instagram videos and movies.\n\nUse the menu buttons below or send an Instagram link directly!';
-  await ctx.reply(introMessage, createMenuKeyboard(userId));
 });
 
 // Menu command handler
 bot.command('menu', (ctx) => {
   // Track user
-  addUser(ctx.from.id, ctx.from.username, ctx.from.first_name, ctx.from.last_name);
+  const userType = addUser(ctx.from.id, ctx.from.username, ctx.from.first_name, ctx.from.last_name);
   
   const menuMessage = '📋 Main Menu\n\nSelect an option:';
-  ctx.reply(menuMessage, createMenuKeyboard(ctx.from.id));
+  
+  // Show admin keyboard for admin, remove keyboard for others
+  if (userType === 'admin') {
+    ctx.reply(menuMessage, createMenuKeyboard(ctx.from.id));
+  } else {
+    ctx.reply(menuMessage, createMenuKeyboard(ctx.from.id));
+  }
 });
 
 // Function to show statistics
@@ -382,7 +503,7 @@ function showStats(ctx) {
     });
   }
   
-  ctx.reply(message, createMenuKeyboard(ctx.from.id));
+  ctx.reply(message, createAdminStatusKeyboard());
 }
 
 // Stats command handler (admin only)
@@ -400,7 +521,7 @@ bot.action('menu_insta', (ctx) => {
   
   // Set user state to waiting for Instagram link
   userStates.set(ctx.from.id, 'waiting_for_insta_link');
-  ctx.reply('Please send me an Instagram video link:');
+  ctx.reply('Please send me an Instagram link (image or video):');
 });
 
 bot.action('menu_kino', (ctx) => {
@@ -438,10 +559,10 @@ bot.command('insta', (ctx) => {
   
   // Set user state to waiting for Instagram link
   userStates.set(ctx.from.id, 'waiting_for_insta_link');
-  ctx.reply('Please send me an Instagram video link:');
+  ctx.reply('Please send me an Instagram link (image or video):');
 });
 
-// Message handler for Instagram links
+// Message handler for Instagram links and admin status button
 bot.on('text', async (ctx) => {
   const userId = ctx.from.id;
   const userState = userStates.get(userId);
@@ -449,6 +570,12 @@ bot.on('text', async (ctx) => {
 
   // Track user
   addUser(userId, ctx.from.username, ctx.from.first_name, ctx.from.last_name);
+
+  // Handle admin status button
+  if (ADMIN_ID && userId === ADMIN_ID && messageText === '📊 Bot Status') {
+    showStats(ctx);
+    return;
+  }
 
   // Check if it's an Instagram URL pattern
   const instagramUrlPattern = /^https?:\/\/(www\.)?(instagram\.com|instagr\.am)\/.+/i;
@@ -459,14 +586,14 @@ bot.on('text', async (ctx) => {
     // Reset user state
     userStates.delete(userId);
     
-    // Download the video
-    await downloadInstagramVideo(ctx, messageText);
+    // Download the media
+    await downloadInstagramMedia(ctx, messageText);
   } 
   // If user just shared an Instagram link directly (auto-detect)
   else if (isInstagramLink) {
     console.log(`[${new Date().toISOString()}] Auto-detected Instagram link from user ${userId}`);
-    // Download the video automatically
-    await downloadInstagramVideo(ctx, messageText);
+    // Download the media automatically
+    await downloadInstagramMedia(ctx, messageText);
   }
 });
 
