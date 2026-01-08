@@ -593,13 +593,14 @@ async function downloadYouTubeVideo(ctx, formatId, youtubeUrl, videoTitle) {
   
   try {
     const timestamp = Date.now();
-    const outputPath = path.join(tempDir, `youtube_${timestamp}.%(ext)s`);
+    const outputPath = path.join(tempDir, `youtube_${timestamp}.mp4`);
     
     const ytDlpArgs = [
       youtubeUrl,
       '-f', formatId,
       '-o', outputPath,
-      '--no-playlist'
+      '--no-playlist',
+      '--merge-output-format', 'mp4'  // Force MP4 container for better phone compatibility
     ];
     
     console.log(`[${new Date().toISOString()}] Running yt-dlp with args:`, ytDlpArgs);
