@@ -480,10 +480,16 @@ function showStats(ctx) {
   ctx.reply(message, createAdminStatusKeyboard());
 }
 
-// Stats command handler (admin only)
+// Stats command handler (admin only) - hidden from commands menu
+// Admin can use the Reply Keyboard button "📊 Bot Status" instead
 bot.command('stats', (ctx) => {
   // Track user
   addUser(ctx.from.id, ctx.from.username, ctx.from.first_name, ctx.from.last_name);
+  // Only show stats if user is admin
+  if (!ADMIN_ID || ctx.from.id !== ADMIN_ID) {
+    ctx.reply('This command is only available for administrators.');
+    return;
+  }
   showStats(ctx);
 });
 
@@ -520,7 +526,9 @@ bot.catch((err, ctx) => {
   ctx.reply('An error occurred. Please try again.');
 });
 
-// Bot commands menu removed - bot now works with direct link sharing only
+// Set empty bot commands menu so no commands are visible to users
+// Stats is only available to admin via Reply Keyboard Markup button
+bot.telegram.setMyCommands([]);
 
 // Start the bot
 bot.launch().then(async () => {
@@ -531,7 +539,7 @@ bot.launch().then(async () => {
   if (ADMIN_ID) {
     try {
       const stats = getStats();
-      const greetingMessage = `🤖 Bot Started Successfully!\n\n📊 Current Statistics:\n• Total Users: ${stats.totalUsers}\n• New Users Today: ${stats.newUsersToday}\n\nUse /stats to view detailed statistics.`;
+      const greetingMessage = `🤖 Bot Started Successfully!\n\n📊 Current Statistics:\n• Total Users: ${stats.totalUsers}\n• New Users Today: ${stats.newUsersToday}\n\nUse the "📊 Bot Status" button to view detailed statistics.`;
       await bot.telegram.sendMessage(ADMIN_ID, greetingMessage);
       console.log(`[${new Date().toISOString()}] Admin notification sent`);
     } catch (error) {
