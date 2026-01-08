@@ -288,10 +288,12 @@ async function downloadInstagramMedia(ctx, messageText) {
     console.log(`[${new Date().toISOString()}] Media type: ${isImage ? 'image' : 'video (or unknown)'}`);
     console.log(`[${new Date().toISOString()}] Output path template: ${outputPath}`);
 
-    // Download media using yt-dlp - remove format selection to let yt-dlp auto-detect
-    // This works better for Instagram images and videos
+    // Download media using yt-dlp
+    // Use format selector that works for both images and videos on Instagram
+    // 'best' format works for both, though yt-dlp warns about it (warning is more relevant for YouTube)
     const ytDlpArgs = [
       messageText,
+      '-f', 'best',
       '-o', outputPath,
       '--no-playlist'
     ];
@@ -306,7 +308,37 @@ async function downloadInstagramMedia(ctx, messageText) {
     
     console.log(`[${new Date().toISOString()}] Running yt-dlp with args:`, ytDlpArgs);
     
-    const stdout = await ytDlpWrap.execPromise(ytDlpArgs);
+    let stdout;
+    try {
+      stdout = await ytDlpWrap.execPromise(ytDlpArgs);
+    } catch (firstError) {
+      // If we get "No video formats found", it's likely an image post
+      // Retry without format restriction to let yt-dlp auto-detect images
+      const errorMessage = firstError.message || '';
+      const stderr = firstError.stderr || '';
+      if (errorMessage.includes('No video formats found') || stderr.includes('No video formats found')) {
+        console.log(`[${new Date().toISOString()}] No video formats found, retrying without format restriction for images...`);
+        
+        // Retry without format selection - this should work for images
+        const retryArgs = [
+          messageText,
+          '-o', outputPath,
+          '--no-playlist'
+        ];
+        
+        if (fs.existsSync(cookiesPath)) {
+          retryArgs.push('--cookies', cookiesPath);
+        }
+        
+        retryArgs.push('--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        
+        console.log(`[${new Date().toISOString()}] Retrying without format restriction:`, retryArgs);
+        stdout = await ytDlpWrap.execPromise(retryArgs);
+      } else {
+        // Re-throw if it's a different error
+        throw firstError;
+      }
+    }
     
     console.log(`[${new Date().toISOString()}] yt-dlp stdout:`, stdout);
     console.log(`[${new Date().toISOString()}] Download completed, checking file...`);
