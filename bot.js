@@ -885,64 +885,67 @@ async function showYouTubeFormats(ctx, youtubeUrl) {
     };
 
     // qualities we care about
-    const targetQualities = ['1080p', '720p', '480p', '360p', '240p', '144p'];
+    // Dynamic scan: Find all unique video qualities available
+    // We want to group by "effective quality label" (e.g. 1080p, 720p)
+    // and pick the best candidate for that quality.
 
-    // Find roughly the file size for each target quality
-    // Note: YouTube often separates video/audio. The 'filesize' in format list might be video-only.
-    // We need to estimate total size (video + audio ~128k).
-    // Or, simpler: Just show the video stream size if that's what we have, or best guess.
+    const qualityMap = new Map(); // label (e.g. "720p") -> { format object, height }
 
-    // Let's create our "virtual" formats list like before, but try to find real sizes
+    for (const f of allFormats) {
+      // Skip audio-only or invalid formats
+      if (!f.height || f.vcodec === 'none') continue;
+
+      const effectiveHeight = f.height;
+      const qualityLabel = `${effectiveHeight}p`;
+
+      // We prefer formats with filesize info
+      const existing = qualityMap.get(qualityLabel);
+      const hasSize = !!(f.filesize || f.filesize_approx);
+
+      if (!existing) {
+        qualityMap.set(qualityLabel, { format: f, height: effectiveHeight, hasSize });
+      } else {
+        // Update if this new one is "better" (has size info when old one didn't)
+        if (!existing.hasSize && hasSize) {
+          qualityMap.set(qualityLabel, { format: f, height: effectiveHeight, hasSize });
+        }
+      }
+    }
+
+    // Convert map to array and sort descending by height
+    const sortedQualities = Array.from(qualityMap.values())
+      .sort((a, b) => b.height - a.height);
+
     const displayFormats = [];
 
-    for (const quality of targetQualities) {
-      // Find a format that matches this quality (height)
-      const height = parseInt(quality);
-
-      // Find ANY format with this height (don't restrict to mp4 as high res is often webm)
-      // We prefer one with filesize if possible
-      const format = allFormats.find(f => f.height === height && (f.filesize || f.filesize_approx)) ||
-        allFormats.find(f => f.height === height);
+    for (const item of sortedQualities) {
+      const quality = `${item.height}p`;
+      const f = item.format;
 
       let sizeStr = 'Unknown';
-      let found = !!format;
+      let size = f.filesize || f.filesize_approx;
 
-      if (format) {
-        // matches this specific quality
-        let size = format.filesize || format.filesize_approx;
-        if (size) {
-          // Add 10% overhead for audio/muxing if it's video only
-          if (format.acodec === 'none') {
-            size = size * 1.1;
-          }
-          sizeStr = formatBytes(size);
+      if (size) {
+        if (f.acodec === 'none') {
+          size = size * 1.1; // Add overhead estimate
         }
-      } else {
-        // If we couldn't find it in the list, but it's a standard quality, 
-        // we can't be sure it exists. 
-        // However, yt-dlp might be able to stream-convert.
-        // But to be accurate to "Available Formats", we should probably only show what we see.
-        // OR, if high res (1080p), it might be DASH video.
-        // Let's trust the JSON dump. If it's not there, it's not there.
+        sizeStr = formatBytes(size);
       }
 
-      if (found) {
-        displayFormats.push({
-          quality: quality,
-          size: sizeStr,
-          id: `bestvideo[height<=${height}]+bestaudio/best[height<=${height}]`
-        });
-      }
-    }
-
-    // If no formats found (weird), fallback to standard list
-    if (displayFormats.length === 0) {
-      targetQualities.slice(0, 4).forEach(q => {
-        displayFormats.push({ quality: q, size: 'Unknown', id: `bestvideo[height<=${parseInt(q)}]+bestaudio/best[height<=${parseInt(q)}]` });
+      displayFormats.push({
+        quality: quality,
+        size: sizeStr,
+        id: `bestvideo[height<=${item.height}]+bestaudio/best[height<=${item.height}]`
       });
+
+      // Limit to top 6 distinct qualities to avoid clutter
+      if (displayFormats.length >= 6) break;
     }
 
-    // Construct Caption
+    // Fallback if no video formats found (shouldn't happen for valid video)
+    if (displayFormats.length === 0) {
+      displayFormats.push({ quality: 'Best', size: 'Unknown', id: 'best' });
+    }// Construct Caption
     let caption = `📺 <b>${videoTitle}</b>\n`;
     caption += `👤 ${channelName}\n`;
     caption += `⏱ ${duration}\n\n`;
