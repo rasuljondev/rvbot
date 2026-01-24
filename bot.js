@@ -898,27 +898,35 @@ async function showYouTubeFormats(ctx, youtubeUrl) {
     for (const quality of targetQualities) {
       // Find a format that matches this quality (height)
       const height = parseInt(quality);
-      const format = allFormats.find(f => f.height === height && f.ext === 'mp4');
+
+      // Find ANY format with this height (don't restrict to mp4 as high res is often webm)
+      // We prefer one with filesize if possible
+      const format = allFormats.find(f => f.height === height && (f.filesize || f.filesize_approx)) ||
+        allFormats.find(f => f.height === height);
 
       let sizeStr = 'Unknown';
+      let found = !!format;
+
       if (format) {
-        // If we have a direct format, use its size
-        // If it's video-only, add ~5-10MB for audio or calculate proper
+        // matches this specific quality
         let size = format.filesize || format.filesize_approx;
         if (size) {
-          // Add 10% overhead for audio/muxing if it's video only (usually distinct format codes like 137, 136)
-          // This is a rough heuristic for the UI
+          // Add 10% overhead for audio/muxing if it's video only
           if (format.acodec === 'none') {
             size = size * 1.1;
           }
           sizeStr = formatBytes(size);
         }
+      } else {
+        // If we couldn't find it in the list, but it's a standard quality, 
+        // we can't be sure it exists. 
+        // However, yt-dlp might be able to stream-convert.
+        // But to be accurate to "Available Formats", we should probably only show what we see.
+        // OR, if high res (1080p), it might be DASH video.
+        // Let's trust the JSON dump. If it's not there, it's not there.
       }
 
-      // Only Add to list if we strictly found a matching format entry in the JSON
-      // OR we can just always show the option (yt-dlp will convert if needed)
-      // To be safe and show REAL info: only show if we found a format source
-      if (format) {
+      if (found) {
         displayFormats.push({
           quality: quality,
           size: sizeStr,
